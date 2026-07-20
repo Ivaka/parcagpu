@@ -66,6 +66,7 @@ COPY ${VMLINUX_H} /build/test/bpf/vmlinux.h
 
 # Generate BPF objects via bpf2go and build the observer binary
 RUN cd test/bpf && \
+    go mod download && \
     USDT_HEADERS=$(go list -m -f '{{.Dir}}' github.com/parca-dev/usdt)/ebpf && \
     export USDT_HEADERS && \
     go generate ./... && \
