@@ -37,8 +37,8 @@ RUN mkdir -p build && \
     cmake -DCUDA_INCLUDE_DIR=/usr/local/cuda/include -DBUILD_TESTS=ON .. && \
     make -j$(nproc)
 
-# Runtime stage
-FROM debian:bookworm-slim
+# Runtime stage — must match builder's glibc version (Ubuntu 24.04 = glibc 2.39)
+FROM ubuntu:24.04
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates \
