@@ -259,11 +259,19 @@ func buildPatch(pod *podObject, cfg Config, namespace string) []jsonPatch {
 			},
 		},
 	}
-	patch = append(patch, jsonPatch{
-		Op:    "add",
-		Path:  "/spec/initContainers/-",
-		Value: initContainer,
-	})
+	if _, hasInit := pod.Spec["initContainers"]; hasInit {
+		patch = append(patch, jsonPatch{
+			Op:    "add",
+			Path:  "/spec/initContainers/-",
+			Value: initContainer,
+		})
+	} else {
+		patch = append(patch, jsonPatch{
+			Op:    "add",
+			Path:  "/spec/initContainers",
+			Value: []interface{}{initContainer},
+		})
+	}
 
 	// 4. For each existing container, add the volume mount and env var.
 	containers := getSlice(pod.Spec, "containers")
