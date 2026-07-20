@@ -221,20 +221,22 @@ int BPF_USDT(handle_stall_reason_map, u64 names_base, u32 count) {
     count = MAX_STALL_REASONS;
 
   // Read each 64-byte name slot and store in the BPF map.
-  // Unrolled to satisfy the BPF verifier — without unrolling, the two paths
-  // (read success vs failure) leave the stack in different states, causing
-  // the verifier to never converge and flag an "infinite loop".
+  // `key` is a separate copy of `i` because passing &i to
+  // bpf_map_update_elem forces the loop counter onto the stack, where the
+  // verifier loses its bounds and rejects the loop as "infinite". With `i`
+  // address-free it stays in a register and the unroll actually happens.
   #pragma unroll
   for (u32 i = 0; i < MAX_STALL_REASONS; i++) {
     if (i >= count)
       break;
 
+    u32 key = i;
     char name[STALL_REASON_NAME_LEN] = {};
     int ret = bpf_probe_read_user(
         name, sizeof(name),
         (void *)(names_base + (u64)i * STALL_REASON_NAME_LEN));
     if (ret == 0)
-      bpf_map_update_elem(&stall_reasons, &i, name, BPF_ANY);
+      bpf_map_update_elem(&stall_reasons, &key, name, BPF_ANY);
   }
 
   u32 one = 1;
