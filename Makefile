@@ -133,6 +133,9 @@ microbenchmarks/%: microbenchmarks/%.cu
 # Requires: clang, libbpf-dev, bpftool (for vmlinux.h), Go 1.21+
 generate:
 	@echo "=== Generating BPF objects ==="
+	@if ! command -v bpftool >/dev/null 2>&1; then \
+		echo "ERROR: bpftool not found. Install it: sudo apt install -y bpftool" >&2; exit 1; \
+	fi
 	@if [ ! -f test/bpf/vmlinux.h ]; then \
 		echo "Generating vmlinux.h from kernel BTF..."; \
 		bpftool btf dump file /sys/kernel/btf/vmlinux format c > test/bpf/vmlinux.h; \
