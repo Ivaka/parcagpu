@@ -1,0 +1,86 @@
+# Multi-stage build for the parcagpu observer (BPF activity parser + Prometheus exporter)
+#
+# The observer:
+#   1. Attaches eBPF uprobes to parcagpu USDT probes in the target process
+#   2. Reads kernel/PC-sample/cubin events from a BPF ring buffer
+#   3. Resolves PC samples to source lines using llvm-dwarfdump
+#   4. Exposes Prometheus metrics at /metrics
+#
+# It is designed to run as a privileged sidecar in a Kubernetes pod alongside
+# a CUDA workload. The workload must have libparcagpucupti.so injected via
+# CUDA_INJECTION64_PATH (handled by the admission webhook).
+
+# Build stage — compiles the .so and the Go observer binary
+FROM ubuntu:24.04 AS builder
+
+# Install build tools for both C (CMake) and Go (bpf2go) stages
+RUN apt-get update && apt-get install -y \
+    cmake \
+    make \
+    g++ \
+    systemtap-sdt-dev \
+    clang \
+    libbpf-dev \
+    bpftool \
+    llvm \
+    wget \
+    ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install Go 1.25
+RUN wget -q https://go.dev/dl/go1.25.1.linux-amd64.tar.gz -O /tmp/go.tar.gz && \
+    tar -C /usr/local -xzf /tmp/go.tar.gz && \
+    rm /tmp/go.tar.gz
+ENV PATH="/usr/local/go/bin:${PATH}"
+
+WORKDIR /build
+
+# Copy CUDA headers (from the cuda-headers image or a previous build stage).
+# The observer binary itself doesn't need CUDA headers, but the .so does.
+ARG CUDA_HEADERS=ghcr.io/parca-dev/cuda-headers:12
+COPY --from=${CUDA_HEADERS} /usr/local/cuda /usr/local/cuda
+
+# Copy source for the .so build
+COPY src /build/src
+COPY proton /build/proton
+COPY CMakeLists.txt /build/
+
+# Build the .so (needed so the observer can parse USDT probe locations from it)
+RUN mkdir -p build && \
+    cd build && \
+    cmake -DCUDA_INCLUDE_DIR=/usr/local/cuda/include -DBUILD_TESTS=OFF .. && \
+    make -j$(nproc)
+
+# Copy BPF observer source
+COPY test/bpf /build/test/bpf
+COPY ebpf /build/ebpf
+
+# vmlinux.h must be provided — generate it on a Linux host before building:
+#   bpftool btf dump file /sys/kernel/btf/vmlinux format c > test/bpf/vmlinux.h
+# The Docker build cannot generate it because /sys/kernel/btf is not mounted.
+ARG VMLINUX_H=test/bpf/vmlinux.h
+COPY ${VMLINUX_H} /build/test/bpf/vmlinux.h
+
+# Generate BPF objects via bpf2go and build the observer binary
+RUN cd test/bpf && \
+    USDT_HEADERS=$(go list -m -f '{{.Dir}}' github.com/parca-dev/usdt)/ebpf && \
+    export USDT_HEADERS && \
+    go generate ./... && \
+    CGO_ENABLED=0 go build -o activity_parser .
+
+# Runtime stage — includes llvm-dwarfdump for PC sample symbolization
+FROM ubuntu:24.04 AS runtime
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    llvm \
+    ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+
+# Copy the observer binary
+COPY --from=builder /build/test/bpf/activity_parser /usr/local/bin/activity_parser
+
+# Copy the .so so the observer can read USDT probe locations from it at startup
+COPY --from=builder /build/build/lib/libparcagpucupti.so /usr/lib/libparcagpucupti.so
+
+ENTRYPOINT ["/usr/local/bin/activity_parser"]
+CMD ["-h"]

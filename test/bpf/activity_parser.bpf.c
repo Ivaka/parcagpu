@@ -117,14 +117,15 @@ struct {
     __uint(type, BPF_MAP_TYPE_ARRAY);
     __type(key, u32);
     __type(value, u64);
-    __uint(max_entries, 4);
+    __uint(max_entries, 5);
 } stats SEC(".maps");
 
 enum stat_key {
-  STAT_BATCHES = 0,    // number of batch probe invocations
-  STAT_ACTIVITIES = 1, // total activity records scanned
-  STAT_KERNELS = 2,    // kernel activities emitted
-  STAT_DROPS = 3,      // ring buffer full (events dropped)
+  STAT_BATCHES = 0,      // number of batch probe invocations
+  STAT_ACTIVITIES = 1,   // total activity records scanned
+  STAT_KERNELS = 2,      // kernel activities emitted
+  STAT_DROPS = 3,        // ring buffer full (events dropped)
+  STAT_CORRELATIONS = 4, // cuda_correlation probe fires
 };
 
 static __always_inline void bump_stat(enum stat_key key) {
@@ -365,6 +366,24 @@ int BPF_USDT(handle_error, s32 code, u64 message_ptr, u64 component_ptr) {
     bpf_probe_read_user_str(evt->component, sizeof(evt->component),
                             (void *)component_ptr);
   bpf_ringbuf_submit(evt, 0);
+  return 0;
+}
+
+// cuda_correlation probe handler.
+//
+// The primary purpose of attaching this handler is to increment the
+// USDT semaphore (via RefCtrOffset in the uprobe attachment) so that
+// PARCAGPU_CUDA_CORRELATION_ENABLED() returns true inside the library.
+// Without a consumer attached to this probe site, the library's activity
+// buffer allocation and correlation emission paths stay dead.
+//
+// We also bump a stat counter so the observer can verify the semaphore
+// is live. No ring-buffer event is needed — the correlation data is
+// already consumed downstream via kernel_executed / activity_batch.
+SEC("usdt/parcagpu/cuda_correlation")
+int BPF_USDT(handle_cuda_correlation, u32 correlation_id, s32 cbid,
+             u64 name_ptr) {
+  bump_stat(STAT_CORRELATIONS);
   return 0;
 }
 

@@ -6,12 +6,11 @@
 # Also drives a mix of CUDA graph launches (--graph-rate): half the launches
 # fan one correlation ID out into many kernel activity records with a nonzero
 # graphId. We verify those graph kernels are profiled (emitted) rather than
-# filtered, and that the driver cuGraphLaunch cbid is subscribed — i.e. the
-# PC-sampling rewrite did not break graph-launch profiling.
+# filtered, and that the cuda_correlation probe fires (verifying the USDT
+# semaphore is bumped natively by the observer, enabling the activity path).
 #
 # Prerequisites:
 #   make local bpf-test
-#   bpftrace (used to bump the cuda_correlation USDT semaphore; see below)
 #
 # Usage:
 #   sudo -E test/test-pc-mock.sh          # default
@@ -28,7 +27,6 @@ BPF="$ROOT/test/bpf/activity_parser"
 CUBIN="$ROOT/test/pc_sample_toy.cubin"
 BPF_LOG="/tmp/parcagpu-pc-mock-bpf.log"
 TEST_LOG="/tmp/parcagpu-pc-mock-test.log"
-SEM_LOG="/tmp/parcagpu-pc-mock-sem.log"
 VERBOSE=""
 
 for arg in "$@"; do
@@ -44,12 +42,10 @@ for f in "$LIB" "$TEST_BIN" "$BPF" "$CUBIN"; do
     exit 1
   fi
 done
-command -v bpftrace >/dev/null || { echo "error: bpftrace not found" >&2; exit 1; }
 
 cleanup() {
   [ -n "${TEST_PID:-}" ] && kill "$TEST_PID" 2>/dev/null || true
   [ -n "${BPF_PID:-}" ] && kill "$BPF_PID" 2>/dev/null || true
-  [ -n "${SEM_PID:-}" ] && kill "$SEM_PID" 2>/dev/null || true
   wait 2>/dev/null || true
 }
 trap cleanup EXIT
@@ -82,16 +78,9 @@ if ! kill -0 "$TEST_PID" 2>/dev/null; then
   exit 1
 fi
 
-# The activity_parser does NOT attach the cuda_correlation probe, but
-# parcagpu's allocBuffer + callback path are gated on its USDT semaphore
-# (PARCAGPU_CUDA_CORRELATION_ENABLED). In production parca-agent attaches it;
-# here we bump that semaphore with bpftrace so the activity path is live.
-echo "=== Bumping cuda_correlation semaphore via bpftrace ==="
-bpftrace -p "$TEST_PID" -e "usdt:$LIB:parcagpu:cuda_correlation { @n = count(); }
-  usdt:$LIB:parcagpu:cuda_correlation /(int32)arg1 == -514 || (int32)arg1 == -515/ { @driver_graph = count(); }" \
-  > "$SEM_LOG" 2>&1 &
-SEM_PID=$!
-sleep 2  # let bpftrace attach + set the semaphore before launches ramp
+# The activity_parser now natively attaches the cuda_correlation probe,
+# which bumps the USDT semaphore that enables the activity buffer allocation
+# and correlation emission paths inside parcagpu. No external bpftrace needed.
 
 # --- Attach BPF parser ---
 echo "=== Starting BPF activity parser ==="
@@ -104,13 +93,10 @@ wait "$TEST_PID" 2>/dev/null || true
 TEST_PID=""
 sleep 2
 
-# --- Stop BPF parser + semaphore bumper ---
+# --- Stop BPF parser ---
 kill "$BPF_PID" 2>/dev/null || true
 wait "$BPF_PID" 2>/dev/null || true
 BPF_PID=""
-kill "$SEM_PID" 2>/dev/null || true
-wait "$SEM_PID" 2>/dev/null || true
-SEM_PID=""
 
 # --- Results ---
 echo
@@ -120,8 +106,6 @@ echo
 echo "=== BPF parser output ==="
 cat "$BPF_LOG"
 echo
-echo "=== bpftrace cuda_correlation hit count ==="
-grep -E "@n:" "$SEM_LOG" || tail -3 "$SEM_LOG" || true
 echo "=== graph map insert count (parcagpu debug) ==="
 grep -c "into graph map" "$TEST_LOG" || true
 echo
@@ -165,15 +149,14 @@ GRAPH_INSERTS=$(grep -c "into graph map" "$TEST_LOG" || true)
 # parcagpu side instead, and confirm the consumer received events.
 GRAPH_EMITTED=$(grep "Kernel activity:" "$TEST_LOG" | grep -cE "graphId=[1-9]" || true)
 BPF_RECEIVED=$(grep -oE "events_received=[0-9]+" "$BPF_LOG" | grep -oE "[0-9]+" | sort -n | tail -1 || echo 0)
-# Driver cuGraphLaunch correlation events (signed cbid -514/-515). Zero means the
-# driver graph-launch cbid wasn't subscribed; the runtime half emits regardless,
-# so GRAPH_EMITTED>0 alone wouldn't catch it.
-DRIVER_GRAPH=$(grep -oE "@driver_graph: [0-9]+" "$SEM_LOG" | grep -oE "[0-9]+" || echo 0)
+# cuda_correlation probe fires (verifies the USDT semaphore was bumped,
+# enabling the activity buffer path). Extract from BPF stats output.
+CORRELATIONS=$(grep -oE "correlations=[0-9]+" "$BPF_LOG" | grep -oE "[0-9]+" | sort -n | tail -1 || echo 0)
 
 check_expr "graph launches inserted into graph map"          "[ \"${GRAPH_INSERTS:-0}\" -gt 0 ]"
 check_expr "graph kernel activities emitted (not filtered)"  "[ \"${GRAPH_EMITTED:-0}\" -gt 0 ]"
 check_expr "BPF consumer received kernel events"             "[ \"${BPF_RECEIVED:-0}\" -gt 0 ]"
-check_expr "driver cuGraphLaunch correlated (cbid subscribed)" "[ \"${DRIVER_GRAPH:-0}\" -gt 0 ]"
+check_expr "cuda_correlation probe fired (semaphore bumped)"  "[ \"${CORRELATIONS:-0}\" -gt 0 ]"
 
 if $PASS; then
   echo

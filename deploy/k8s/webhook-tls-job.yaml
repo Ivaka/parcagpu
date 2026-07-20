@@ -1,0 +1,71 @@
+---
+# Job that generates a self-signed TLS cert for the webhook, creates a Kubernetes
+# TLS secret, and patches the MutatingWebhookConfiguration with the CA bundle.
+# Runs once at install time.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: parcagpu-webhook-tls
+  namespace: kube-system
+spec:
+  backoffLimit: 3
+  template:
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: tls-gen
+          image: busybox:latest
+          command:
+            - sh
+            - -c
+            - |
+              set -e
+              echo "Generating self-signed TLS certificate..."
+              mkdir -p /certs
+
+              # Generate private key
+              openssl ecparam -genkey -name prime256v1 -out /certs/tls.key -noout
+
+              # Generate CSR
+              openssl req -new -key /certs/tls.key -out /certs/tls.csr \
+                -subj "/CN=parcagpu-webhook.default.svc"
+
+              # Create a config for SAN
+              cat > /certs/san.cnf <<EOF
+              [req]
+              distinguished_name = req_distinguished_name
+              [req_distinguished_name]
+              [v3_req]
+              subjectAltName = @alt_names
+              [alt_names]
+              DNS.1 = parcagpu-webhook
+              DNS.2 = parcagpu-webhook.default
+              DNS.3 = parcagpu-webhook.default.svc
+              DNS.4 = parcagpu-webhook.default.svc.cluster.local
+              DNS.5 = parcagpu-webhook.kube-system
+              DNS.6 = parcagpu-webhook.kube-system.svc
+              DNS.7 = parcagpu-webhook.kube-system.svc.cluster.local
+              EOF
+
+              # Self-sign the cert
+              openssl x509 -req -in /certs/tls.csr -signkey /certs/tls.key \
+                -out /certs/tls.crt -days 365 \
+                -extfile /certs/san.cnf -extensions v3_req
+
+              echo "Creating Kubernetes TLS secret..."
+              kubectl create secret tls parcagpu-webhook-tls \
+                --cert=/certs/tls.crt --key=/certs/tls.key \
+                -n kube-system --dry-run=client -o yaml | kubectl apply -f -
+
+              echo "Patching MutatingWebhookConfiguration with CA bundle..."
+              CA_BUNDLE=$(base64 -w0 /certs/tls.crt)
+              kubectl patch mutatingwebhookconfiguration parcagpu-webhook \
+                --type='json' -p="[{\"op\":\"replace\",\"path\":\"/webhooks/0/clientConfig/caBundle\",\"value\":\"${CA_BUNDLE}\"}]"
+
+              echo "Done. TLS certificate and webhook configuration installed."
+          volumeMounts:
+            - name: certs
+              mountPath: /certs
+      volumes:
+        - name: certs
+          emptyDir: {}

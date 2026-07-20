@@ -1,0 +1,171 @@
+---
+# Grafana deployment with parcagpu dashboard pre-loaded
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: parcagpu-grafana
+  namespace: default
+  labels:
+    app: parcagpu-grafana
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: parcagpu-grafana
+  template:
+    metadata:
+      labels:
+        app: parcagpu-grafana
+    spec:
+      containers:
+        - name: grafana
+          image: grafana/grafana:latest
+          ports:
+            - containerPort: 3000
+              name: http
+          env:
+            - name: GF_SECURITY_ADMIN_PASSWORD
+              value: "admin"
+            - name: GF_AUTH_ANONYMOUS_ENABLED
+              value: "true"
+            - name: GF_AUTH_ANONYMOUS_ORG_ROLE
+              value: "Admin"
+          volumeMounts:
+            - name: datasource
+              mountPath: /etc/grafana/provisioning/datasources/datasource.yaml
+              subPath: datasource.yaml
+            - name: dashboard-provider
+              mountPath: /etc/grafana/provisioning/dashboards
+            - name: dashboard-json
+              mountPath: /var/lib/grafana/dashboards
+      volumes:
+        - name: datasource
+          configMap:
+            name: parcagpu-grafana-datasource
+        - name: dashboard-provider
+          configMap:
+            name: parcagpu-grafana-provider
+        - name: dashboard-json
+          configMap:
+            name: parcagpu-grafana-dashboard
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: parcagpu-grafana-provider
+  namespace: default
+data:
+  provider.yaml: |
+    apiVersion: 1
+    providers:
+      - name: 'parcagpu'
+        orgId: 1
+        folder: ''
+        type: file
+        disableDeletion: false
+        editable: true
+        options:
+          path: /var/lib/grafana/dashboards
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: parcagpu-grafana-datasource
+  namespace: default
+data:
+  datasource.yaml: |
+    apiVersion: 1
+    datasources:
+      - name: Prometheus
+        type: prometheus
+        access: proxy
+        url: http://prometheus-server.default.svc.cluster.local:9090
+        isDefault: true
+        editable: true
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: parcagpu-grafana-dashboard
+  namespace: default
+data:
+  parcagpu.json: |
+    {
+      "annotations": {"list": []},
+      "editable": true,
+      "graphTooltip": 0,
+      "title": "Parcagpu GPU Observability",
+      "uid": "parcagpu",
+      "panels": [
+        {
+          "title": "GPU Active Ratio",
+          "type": "timeseries",
+          "datasource": "Prometheus",
+          "gridPos": {"h": 8, "w": 12, "x": 0, "y": 0},
+          "targets": [
+            {"expr": "rate(parcagpu_gpu_active_seconds_total[1m])", "legendFormat": "{{pod}} dev={{device_id}}", "refId": "A"}
+          ]
+        },
+        {
+          "title": "Kernel Count by Name",
+          "type": "table",
+          "datasource": "Prometheus",
+          "gridPos": {"h": 8, "w": 12, "x": 12, "y": 0},
+          "targets": [
+            {"expr": "topk(10, sum(rate(parcagpu_kernel_count_total[1m])) by (kernel_name))", "format": "table", "instant": true, "refId": "A"}
+          ]
+        },
+        {
+          "title": "Stall Reason Breakdown",
+          "type": "barchart",
+          "datasource": "Prometheus",
+          "gridPos": {"h": 8, "w": 24, "x": 0, "y": 8},
+          "targets": [
+            {"expr": "sum(rate(parcagpu_pc_samples_total[1m])) by (stall_reason)", "legendFormat": "{{stall_reason}}", "refId": "A"}
+          ]
+        },
+        {
+          "title": "Events Dropped",
+          "type": "stat",
+          "datasource": "Prometheus",
+          "gridPos": {"h": 4, "w": 8, "x": 0, "y": 16},
+          "targets": [{"expr": "sum(parcagpu_events_dropped_total)", "refId": "A"}]
+        },
+        {
+          "title": "Probes Attached",
+          "type": "stat",
+          "datasource": "Prometheus",
+          "gridPos": {"h": 4, "w": 8, "x": 8, "y": 16},
+          "targets": [{"expr": "sum(parcagpu_probe_attached)", "refId": "A"}]
+        },
+        {
+          "title": "Cubins Loaded",
+          "type": "stat",
+          "datasource": "Prometheus",
+          "gridPos": {"h": 4, "w": 8, "x": 16, "y": 16},
+          "targets": [{"expr": "sum(parcagpu_cubins_loaded)", "refId": "A"}]
+        }
+      ],
+      "schemaVersion": 27,
+      "style": "dark",
+      "tags": ["parcagpu", "gpu"],
+      "templating": {"list": []},
+      "time": {"from": "now-15m", "to": "now"},
+      "version": 1
+    }
+---
+# Service exposing Grafana
+apiVersion: v1
+kind: Service
+metadata:
+  name: parcagpu-grafana
+  namespace: default
+spec:
+  type: NodePort
+  selector:
+    app: parcagpu-grafana
+  ports:
+    - port: 3000
+      targetPort: 3000
+      nodePort: 30300
+      name: http

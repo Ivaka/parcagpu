@@ -21,6 +21,9 @@ COPY build/lib/libcuda.so.1 ./build/lib/
 COPY build/lib/libcupti.so ./build/lib/
 COPY build/lib/libcupti.so.12 ./build/lib/
 
+# Copy the mock cubin for PC sampling tests
+COPY test/pc_sample_toy.cubin ./pc_sample_toy.cubin
+
 # Set environment
 ENV LD_LIBRARY_PATH=/test/build/lib
 ENV PARCAGPU_DEBUG=1

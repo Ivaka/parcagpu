@@ -1,0 +1,37 @@
+---
+# Demo workload using mock CUPTI (no GPU required)
+# This runs the test_cupti_prof binary with mock CUDA/CUPTI libraries,
+# allowing the full parcagpu pipeline to be demonstrated on any cluster.
+#
+# The admission webhook will inject:
+#   - An init container that copies libparcagpucupti.so
+#   - The observer sidecar
+#   - CUDA_INJECTION64_PATH env var
+#   - shareProcessNamespace: true
+apiVersion: v1
+kind: Pod
+metadata:
+  name: parcagpu-demo-mock
+  namespace: default
+  labels:
+    parcagpu.dev/enabled: "true"
+spec:
+  containers:
+    - name: cuda-workload
+      image: ghcr.io/parca-dev/parcagpu-test:latest
+      command:
+        - /test/build/bin/test_cupti_prof
+        - /parcagpu/libparcagpucupti.so
+        - --launch-rate=50
+        - --graph-rate=25
+        - --duration=300
+      env:
+        - name: PARCAGPU_DEBUG
+          value: "1"
+        - name: PARCAGPU_PC_SAMPLING_RATE
+          value: "10000"
+        - name: MOCK_CUBIN_PATH
+          value: "/test/pc_sample_toy.cubin"
+        - name: LD_LIBRARY_PATH
+          value: "/test/build/lib"
+  restartPolicy: Never

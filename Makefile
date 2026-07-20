@@ -1,4 +1,4 @@
-.PHONY: all clean test build-amd64 build-arm64 build-all cross docker-push docker-test-build docker-test-run format local debug generate bpf-test microbenchmarks test-multi test-pc-real test-pc-mock
+.PHONY: all clean test build-amd64 build-arm64 build-all cross docker-push docker-test-build docker-test-run format local debug generate bpf-test microbenchmarks test-multi test-pc-real test-pc-mock build-observer-amd64 build-observer-arm64 docker-push-observer
 
 LIB_NAME = libparcagpucupti.so
 
@@ -92,11 +92,25 @@ docker-push:
 		.
 	@echo "Images pushed successfully to $(IMAGE):$(IMAGE_TAG)"
 
-# Build test container image
+# Build test container image (requires local .so + mock libs from build-amd64)
 docker-test-build: build-amd64
 	@echo "=== Building test container image ==="
+	@cp build/amd64/$(LIB_NAME) build-local/lib/ 2>/dev/null || true
+	@cmake -B build-local -S . -DCMAKE_BUILD_TYPE=RelWithDebInfo -DBUILD_TESTS=ON 2>/dev/null || true
+	@cmake --build build-local 2>/dev/null || true
+	@mkdir -p build-local/lib build-local/bin
+	@cp build/amd64/$(LIB_NAME) build-local/lib/
 	@docker build -f Dockerfile.test -t parcagpu-test:latest .
 	@echo "Test container built: parcagpu-test:latest"
+
+# Build and push the test container image to ghcr.io
+TEST_IMAGE ?= ghcr.io/parca-dev/parcagpu-test
+TEST_IMAGE_TAG ?= latest
+docker-push-test: docker-test-build
+	@echo "=== Pushing test image to $(TEST_IMAGE):$(TEST_IMAGE_TAG) ==="
+	@docker tag parcagpu-test:latest $(TEST_IMAGE):$(TEST_IMAGE_TAG)
+	@docker push $(TEST_IMAGE):$(TEST_IMAGE_TAG)
+	@echo "Test image pushed to $(TEST_IMAGE):$(TEST_IMAGE_TAG)"
 
 # Run tests in container
 # Pass arguments with ARGS variable (e.g., make docker-test-run ARGS="--forever")
@@ -167,3 +181,48 @@ test-pc-mock: local bpf-test
 format:
 	@echo "=== Formatting source files ==="
 	@clang-format -i -style=file src/*.cpp src/*.h test/*.c
+
+# Build the observer container image for AMD64.
+# Requires test/bpf/vmlinux.h — generate it first on a Linux host:
+#   bpftool btf dump file /sys/kernel/btf/vmlinux format c > test/bpf/vmlinux.h
+build-observer-amd64:
+	@test -f test/bpf/vmlinux.h || { echo "ERROR: test/bpf/vmlinux.h not found. Generate it with: bpftool btf dump file /sys/kernel/btf/vmlinux format c > test/bpf/vmlinux.h" >&2; exit 1; }
+	@echo "=== Building observer image for AMD64 ==="
+	@docker buildx create --name parcagpu-builder --use --bootstrap 2>/dev/null || docker buildx use parcagpu-builder
+	@docker buildx build -f Dockerfile.observer \
+		--target runtime \
+		--output type=docker \
+		--platform linux/amd64 \
+		-t parcagpu-observer:amd64 \
+		.
+	@echo "Observer image built: parcagpu-observer:amd64"
+
+# Build the observer container image for ARM64.
+# Requires test/bpf/vmlinux.h — generate it first on a Linux host:
+#   bpftool btf dump file /sys/kernel/btf/vmlinux format c > test/bpf/vmlinux.h
+build-observer-arm64:
+	@test -f test/bpf/vmlinux.h || { echo "ERROR: test/bpf/vmlinux.h not found. Generate it with: bpftool btf dump file /sys/kernel/btf/vmlinux format c > test/bpf/vmlinux.h" >&2; exit 1; }
+	@echo "=== Building observer image for ARM64 ==="
+	@docker buildx create --name parcagpu-builder --use --bootstrap 2>/dev/null || docker buildx use parcagpu-builder
+	@docker buildx build -f Dockerfile.observer \
+		--target runtime \
+		--output type=docker \
+		--platform linux/arm64 \
+		-t parcagpu-observer:arm64 \
+		.
+	@echo "Observer image built: parcagpu-observer:arm64"
+
+# Build and push multi-arch observer image to ghcr.io
+OBSERVER_IMAGE ?= ghcr.io/parca-dev/parcagpu-observer
+OBSERVER_IMAGE_TAG ?= latest
+docker-push-observer:
+	@test -f test/bpf/vmlinux.h || { echo "ERROR: test/bpf/vmlinux.h not found. Generate it with: bpftool btf dump file /sys/kernel/btf/vmlinux format c > test/bpf/vmlinux.h" >&2; exit 1; }
+	@echo "=== Building and pushing multi-arch observer image to $(OBSERVER_IMAGE):$(OBSERVER_IMAGE_TAG) ==="
+	@docker buildx create --name parcagpu-builder --use --bootstrap 2>/dev/null || docker buildx use parcagpu-builder
+	@docker buildx build -f Dockerfile.observer \
+		--target runtime \
+		--platform linux/amd64,linux/arm64 \
+		--tag $(OBSERVER_IMAGE):$(OBSERVER_IMAGE_TAG) \
+		--push \
+		.
+	@echo "Observer image pushed to $(OBSERVER_IMAGE):$(OBSERVER_IMAGE_TAG)"

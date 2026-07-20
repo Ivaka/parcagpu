@@ -23,6 +23,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"net/http"
 	"os"
 	"os/exec"
 	"os/signal"
@@ -39,12 +40,88 @@ import (
 	"github.com/cilium/ebpf/link"
 	"github.com/cilium/ebpf/ringbuf"
 	"github.com/parca-dev/usdt"
+	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"golang.org/x/sys/unix"
 
 	sasstable "github.com/gnurizen/sass-table"
 )
 
 //go:generate go run github.com/cilium/ebpf/cmd/bpf2go -target $GOARCH -cflags "-I../../ebpf -I$USDT_HEADERS" activityParser activity_parser.bpf.c
+
+// Metric definitions for the Prometheus exporter.
+var (
+	metricKernelDuration = prometheus.NewHistogramVec(
+		prometheus.HistogramOpts{
+			Name:    "parcagpu_kernel_duration_seconds",
+			Help:    "Duration of CUDA kernel executions in seconds.",
+			Buckets: []float64{0.000001, 0.00001, 0.0001, 0.001, 0.01, 0.1, 1},
+		},
+		[]string{"pod", "namespace", "kernel_name", "device_id"},
+	)
+	metricKernelCount = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "parcagpu_kernel_count_total",
+			Help: "Total number of CUDA kernel executions observed.",
+		},
+		[]string{"pod", "namespace", "kernel_name", "device_id"},
+	)
+	metricPCSamples = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "parcagpu_pc_samples_total",
+			Help: "Total PC samples collected, by stall reason.",
+		},
+		[]string{"pod", "namespace", "kernel_name", "stall_reason", "device_id"},
+	)
+	metricGPUActive = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "parcagpu_gpu_active_seconds_total",
+			Help: "Total seconds of GPU active time (sum of kernel durations) per device.",
+		},
+		[]string{"pod", "namespace", "device_id"},
+	)
+	metricEventsDropped = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "parcagpu_events_dropped_total",
+			Help: "Total events dropped due to ring buffer overflow.",
+		},
+		[]string{"pod", "namespace"},
+	)
+	metricCubinsLoaded = prometheus.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Name: "parcagpu_cubins_loaded",
+			Help: "Number of cubin modules currently loaded.",
+		},
+		[]string{"pod", "namespace"},
+	)
+	metricProbeAttached = prometheus.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Name: "parcagpu_probe_attached",
+			Help: "1 if the probe is attached, 0 otherwise.",
+		},
+		[]string{"pod", "namespace", "probe_name"},
+	)
+	metricBPFStats = prometheus.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Name: "parcagpu_bpf_stats",
+			Help: "BPF-side statistics (batches, activities, kernels, correlations, drops).",
+		},
+		[]string{"pod", "namespace", "stat_name"},
+	)
+)
+
+func init() {
+	prometheus.MustRegister(
+		metricKernelDuration,
+		metricKernelCount,
+		metricPCSamples,
+		metricGPUActive,
+		metricEventsDropped,
+		metricCubinsLoaded,
+		metricProbeAttached,
+		metricBPFStats,
+	)
+}
 
 // Event type tags — must match BPF #defines.
 const (
@@ -105,10 +182,11 @@ type PCSampleEvent struct {
 }
 
 const (
-	statBatches    = 0
-	statActivities = 1
-	statKernels    = 2
-	statDrops      = 3
+	statBatches      = 0
+	statActivities   = 1
+	statKernels      = 2
+	statDrops        = 3
+	statCorrelations = 4
 )
 
 // lineEntry is a single address→source mapping from the DWARF line table.
@@ -382,15 +460,84 @@ func readProcessMemory(pid int, addr, size uint64) ([]byte, error) {
 	return data, nil
 }
 
+// podMetadata holds Kubernetes pod identity, populated from environment
+// variables (set via the Downward API in the pod spec).
+type podMetadata struct {
+	name      string
+	namespace string
+}
+
+// discoverWorkloadPID scans /proc/*/maps for a process that has the parcagpu
+// shared library loaded. In a pod with shareProcessNamespace: true, all
+// containers share a PID namespace, so the sidecar can see the workload's
+// processes directly. Retries every 500ms for up to 60 seconds to handle
+// slow-starting workloads.
+func discoverWorkloadPID(libBasename string) (int, error) {
+	deadline := time.Now().Add(60 * time.Second)
+	for time.Now().Before(deadline) {
+		entries, err := os.ReadDir("/proc")
+		if err != nil {
+			return 0, fmt.Errorf("reading /proc: %w", err)
+		}
+		for _, entry := range entries {
+			if !entry.IsDir() {
+				continue
+			}
+			pidStr := entry.Name()
+			pid, err := strconv.Atoi(pidStr)
+			if err != nil || pid <= 1 {
+				continue
+			}
+
+			// Read /proc/<pid>/maps and check if the parcagpu .so is mapped.
+			mapsData, err := os.ReadFile(fmt.Sprintf("/proc/%d/maps", pid))
+			if err != nil {
+				continue // process may have exited
+			}
+			if bytes.Contains(mapsData, []byte(libBasename)) {
+				if pid == os.Getpid() {
+					continue
+				}
+				return pid, nil
+			}
+		}
+		time.Sleep(500 * time.Millisecond)
+	}
+	return 0, fmt.Errorf("no process with %s found within 60s", libBasename)
+}
+
 func main() {
 	pid := flag.Int("pid", 0, "PID of the target process")
 	libPath := flag.String("lib", "", "Path to the shared library containing the USDT probe")
 	verbose := flag.Bool("v", false, "Print every kernel event (default: summary only)")
+	discover := flag.Bool("discover", false, "Auto-discover workload PID by scanning /proc/*/maps")
+	libPathDiscover := flag.String("lib-path", "", "Path to the .so (used with -discover instead of -lib)")
+	podName := flag.String("pod-name", os.Getenv("POD_NAME"), "Pod name (default: $POD_NAME env)")
+	podNamespace := flag.String("pod-namespace", os.Getenv("POD_NAMESPACE"), "Pod namespace (default: $POD_NAMESPACE env)")
+	metricsPort := flag.Int("metrics-port", 0, "Port for Prometheus /metrics endpoint (0 = disabled)")
 	flag.Parse()
 
-	if *pid == 0 || *libPath == "" {
+	if *discover {
+		if *libPathDiscover == "" {
+			flag.Usage()
+			os.Exit(1)
+		}
+		*libPath = *libPathDiscover
+	} else if *pid == 0 || *libPath == "" {
 		flag.Usage()
 		os.Exit(1)
+	}
+
+	podMeta := podMetadata{name: *podName, namespace: *podNamespace}
+	if *discover {
+		log.Printf("Pod: %s/%s", podMeta.namespace, podMeta.name)
+		log.Printf("Discovering workload PID (looking for %s in /proc/*/maps)...", filepath.Base(*libPath))
+		discoveredPID, err := discoverWorkloadPID(filepath.Base(*libPath))
+		if err != nil {
+			log.Fatalf("PID discovery failed: %v", err)
+		}
+		*pid = discoveredPID
+		log.Printf("Discovered workload PID: %d", *pid)
 	}
 
 	// Resolve symlinks so uprobe attaches to the correct inode.
@@ -441,6 +588,7 @@ func main() {
 		{"cubin_unloaded", objs.HandleCubinUnloaded},
 		{"pc_sample_batch", objs.HandlePcSampleBatch},
 		{"error", objs.HandleError},
+		{"cuda_correlation", objs.HandleCudaCorrelation},
 	}
 
 	var links []link.Link
@@ -495,6 +643,23 @@ func main() {
 	// Stall reason index → name cache, populated lazily from BPF map.
 	stallReasonNames := map[uint32]string{}
 
+	// Export probe attachment as metrics.
+	for _, t := range targets {
+		metricProbeAttached.WithLabelValues(podMeta.name, podMeta.namespace, t.name).Set(1)
+	}
+
+	// Start Prometheus metrics server if requested.
+	if *metricsPort > 0 {
+		go func() {
+			http.Handle("/metrics", promhttp.Handler())
+			addr := fmt.Sprintf(":%d", *metricsPort)
+			log.Printf("Prometheus metrics server listening on %s/metrics", addr)
+			if err := http.ListenAndServe(addr, nil); err != nil {
+				log.Printf("Metrics server error: %v", err)
+			}
+		}()
+	}
+
 	// Open ring buffer reader.
 	rd, err := ringbuf.NewReader(objs.Events)
 	if err != nil {
@@ -536,7 +701,7 @@ func main() {
 
 	go func() {
 		for range ticker.C {
-			printStats(&objs, eventCount)
+			printStats(&objs, eventCount, podMeta)
 		}
 	}()
 
@@ -565,12 +730,25 @@ func main() {
 				continue
 			}
 			eventCount++
+			name := cString(event.Name[:])
+			duration := event.End - event.Start
 			if *verbose {
-				name := cString(event.Name[:])
-				duration := event.End - event.Start
 				fmt.Printf("kernel: name=%-40s corr=%-6d dev=%d stream=%d graph=%-3d duration=%dns\n",
 					name, event.CorrelationID, event.DeviceID, event.StreamID, event.GraphID, duration)
 			}
+			// Export metrics.
+			metricKernelDuration.WithLabelValues(
+				podMeta.name, podMeta.namespace, name,
+				strconv.FormatUint(uint64(event.DeviceID), 10),
+			).Observe(float64(duration) / 1e9)
+			metricKernelCount.WithLabelValues(
+				podMeta.name, podMeta.namespace, name,
+				strconv.FormatUint(uint64(event.DeviceID), 10),
+			).Inc()
+			metricGPUActive.WithLabelValues(
+				podMeta.name, podMeta.namespace,
+				strconv.FormatUint(uint64(event.DeviceID), 10),
+			).Add(float64(duration) / 1e9)
 
 		case eventTypeCubinLoaded:
 			var event CubinEvent
@@ -579,6 +757,7 @@ func main() {
 				continue
 			}
 			cubins.load(event.CubinCRC, event.CubinPtr, event.CubinSize)
+			metricCubinsLoaded.WithLabelValues(podMeta.name, podMeta.namespace).Inc()
 
 		case eventTypeCubinUnloaded:
 			var event CubinEvent
@@ -587,6 +766,7 @@ func main() {
 				continue
 			}
 			cubins.unload(event.CubinCRC)
+			metricCubinsLoaded.WithLabelValues(podMeta.name, podMeta.namespace).Dec()
 
 		case eventTypeError:
 			var event ErrorEvent
@@ -647,32 +827,45 @@ func main() {
 					srName = fmt.Sprintf("reason[%d]", sr.Index)
 				}
 				fmt.Printf("    %s = %d\n", srName, sr.Samples)
+				metricPCSamples.WithLabelValues(
+					podMeta.name, podMeta.namespace, name, srName, "",
+				).Add(float64(sr.Samples))
 			}
 		}
 	}
 
 	fmt.Println()
 	log.Printf("Final stats:")
-	printStats(&objs, eventCount)
+	printStats(&objs, eventCount, podMeta)
 	log.Printf("  pc_samples=%d", pcSampleCount)
 	printStallReasonMap(&objs)
 	printCubins(cubins)
 }
 
-func printStats(objs *activityParserObjects, eventCount uint64) {
-	var batches, activities, kernels, drops uint64
+func printStats(objs *activityParserObjects, eventCount uint64, podMeta podMetadata) {
+	var batches, activities, kernels, drops, correlations uint64
 	batchKey := uint32(statBatches)
 	activityKey := uint32(statActivities)
 	kernelKey := uint32(statKernels)
 	dropsKey := uint32(statDrops)
+	corrKey := uint32(statCorrelations)
 
 	objs.Stats.Lookup(&batchKey, &batches)
 	objs.Stats.Lookup(&activityKey, &activities)
 	objs.Stats.Lookup(&kernelKey, &kernels)
 	objs.Stats.Lookup(&dropsKey, &drops)
+	objs.Stats.Lookup(&corrKey, &correlations)
 
-	log.Printf("  batches=%d activities_scanned=%d kernels_found=%d events_received=%d drops=%d",
-		batches, activities, kernels, eventCount, drops)
+	log.Printf("  batches=%d activities_scanned=%d kernels_found=%d events_received=%d drops=%d correlations=%d",
+		batches, activities, kernels, eventCount, drops, correlations)
+
+	// Export BPF stats as Prometheus metrics.
+	metricBPFStats.WithLabelValues(podMeta.name, podMeta.namespace, "batches").Set(float64(batches))
+	metricBPFStats.WithLabelValues(podMeta.name, podMeta.namespace, "activities_scanned").Set(float64(activities))
+	metricBPFStats.WithLabelValues(podMeta.name, podMeta.namespace, "kernels_found").Set(float64(kernels))
+	metricBPFStats.WithLabelValues(podMeta.name, podMeta.namespace, "drops").Set(float64(drops))
+	metricBPFStats.WithLabelValues(podMeta.name, podMeta.namespace, "correlations").Set(float64(correlations))
+	metricEventsDropped.WithLabelValues(podMeta.name, podMeta.namespace).Add(float64(drops))
 }
 
 func printStallReasonMap(objs *activityParserObjects) {

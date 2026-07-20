@@ -1,0 +1,59 @@
+---
+# Deployment for the parcagpu webhook server
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: parcagpu-webhook
+  namespace: kube-system
+  labels:
+    app: parcagpu-webhook
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: parcagpu-webhook
+  template:
+    metadata:
+      labels:
+        app: parcagpu-webhook
+    spec:
+      serviceAccountName: parcagpu-webhook
+      containers:
+        - name: webhook
+          image: ghcr.io/parca-dev/parcagpu-webhook:latest
+          args:
+            - -cert=/certs/tls.crt
+            - -key=/certs/tls.key
+            - -port=8443
+          ports:
+            - containerPort: 8443
+              name: webhook
+          volumeMounts:
+            - name: certs
+              mountPath: /certs
+              readOnly: true
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: 8443
+              scheme: HTTPS
+            initialDelaySeconds: 2
+            periodSeconds: 5
+      volumes:
+        - name: certs
+          secret:
+            secretName: parcagpu-webhook-tls
+---
+# Service exposing the webhook over TLS
+apiVersion: v1
+kind: Service
+metadata:
+  name: parcagpu-webhook
+  namespace: kube-system
+spec:
+  selector:
+    app: parcagpu-webhook
+  ports:
+    - port: 8443
+      targetPort: 8443
+      name: webhook

@@ -1,0 +1,186 @@
+{
+  "annotations": {
+    "list": [
+      {
+        "builtIn": 1,
+        "datasource": "-- Prometheus --",
+        "enable": true,
+        "hide": true,
+        "iconColor": "rgba(0, 211, 255, 1)",
+        "name": "Annotations & Alerts",
+        "type": "dashboard"
+      }
+    ]
+  },
+  "editable": true,
+  "graphTooltip": 0,
+  "id": null,
+  "panels": [
+    {
+      "title": "GPU Active Ratio (per device)",
+      "type": "timeseries",
+      "datasource": "Prometheus",
+      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 0},
+      "targets": [
+        {
+          "expr": "rate(parcagpu_gpu_active_seconds_total{pod=~\"$pod\", namespace=~\"$namespace\"}[1m])",
+          "legendFormat": "{{pod}} dev={{device_id}}",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit",
+          "min": 0,
+          "max": 1
+        }
+      }
+    },
+    {
+      "title": "Kernel Duration Distribution",
+      "type": "heatmap",
+      "datasource": "Prometheus",
+      "gridPos": {"h": 8, "w": 12, "x": 12, "y": 0},
+      "targets": [
+        {
+          "expr": "rate(parcagpu_kernel_duration_seconds_bucket{pod=~\"$pod\", namespace=~\"$namespace\"}[1m])",
+          "legendFormat": "{{le}}",
+          "refId": "A",
+          "format": "heatmap"
+        }
+      ]
+    },
+    {
+      "title": "Kernel Count by Name",
+      "type": "table",
+      "datasource": "Prometheus",
+      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 8},
+      "targets": [
+        {
+          "expr": "topk(10, sum(rate(parcagpu_kernel_count_total{pod=~\"$pod\", namespace=~\"$namespace\"}[1m])) by (kernel_name))",
+          "legendFormat": "{{kernel_name}}",
+          "refId": "A",
+          "format": "table",
+          "instant": true
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ops"
+        }
+      }
+    },
+    {
+      "title": "Stall Reason Breakdown",
+      "type": "barchart",
+      "datasource": "Prometheus",
+      "gridPos": {"h": 8, "w": 12, "x": 12, "y": 8},
+      "targets": [
+        {
+          "expr": "sum(rate(parcagpu_pc_samples_total{pod=~\"$pod\", namespace=~\"$namespace\"}[1m])) by (stall_reason)",
+          "legendFormat": "{{stall_reason}}",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "title": "Events Dropped",
+      "type": "stat",
+      "datasource": "Prometheus",
+      "gridPos": {"h": 4, "w": 6, "x": 0, "y": 16},
+      "targets": [
+        {
+          "expr": "sum(parcagpu_events_dropped_total{pod=~\"$pod\", namespace=~\"$namespace\"})",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        }
+      }
+    },
+    {
+      "title": "Probes Attached",
+      "type": "stat",
+      "datasource": "Prometheus",
+      "gridPos": {"h": 4, "w": 6, "x": 6, "y": 16},
+      "targets": [
+        {
+          "expr": "sum(parcagpu_probe_attached{pod=~\"$pod\", namespace=~\"$namespace\"})",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        }
+      }
+    },
+    {
+      "title": "Cubins Loaded",
+      "type": "stat",
+      "datasource": "Prometheus",
+      "gridPos": {"h": 4, "w": 6, "x": 12, "y": 16},
+      "targets": [
+        {
+          "expr": "sum(parcagpu_cubins_loaded{pod=~\"$pod\", namespace=~\"$namespace\"})",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        }
+      }
+    },
+    {
+      "title": "BPF Stats",
+      "type": "table",
+      "datasource": "Prometheus",
+      "gridPos": {"h": 4, "w": 6, "x": 18, "y": 16},
+      "targets": [
+        {
+          "expr": "parcagpu_bpf_stats{pod=~\"$pod\", namespace=~\"$namespace\"}",
+          "legendFormat": "{{stat_name}}",
+          "refId": "A",
+          "format": "table",
+          "instant": true
+        }
+      ]
+    }
+  ],
+  "schemaVersion": 27,
+  "style": "dark",
+  "tags": ["parcagpu", "gpu", "cuda"],
+  "templating": {
+    "list": [
+      {
+        "allValue": ".*",
+        "current": {"selected": true, "text": "All", "value": ".*"},
+        "datasource": "Prometheus",
+        "definition": "label_values(parcagpu_kernel_count_total, pod)",
+        "name": "pod",
+        "query": "label_values(parcagpu_kernel_count_total, pod)",
+        "refresh": 1,
+        "type": "query"
+      },
+      {
+        "allValue": ".*",
+        "current": {"selected": true, "text": "All", "value": ".*"},
+        "datasource": "Prometheus",
+        "definition": "label_values(parcagpu_kernel_count_total, namespace)",
+        "name": "namespace",
+        "query": "label_values(parcagpu_kernel_count_total, namespace)",
+        "refresh": 1,
+        "type": "query"
+      }
+    ]
+  },
+  "time": {"from": "now-15m", "to": "now"},
+  "timepicker": {},
+  "timezone": "browser",
+  "title": "Parcagpu GPU Observability",
+  "uid": "parcagpu",
+  "version": 1
+}

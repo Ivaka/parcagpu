@@ -1,0 +1,29 @@
+---
+# Demo workload using a real GPU
+# Runs a CUDA microbenchmark that launches kernels with PC sampling enabled.
+# Requires a node with an NVIDIA GPU and the NVIDIA device plugin.
+apiVersion: v1
+kind: Pod
+metadata:
+  name: parcagpu-demo-gpu
+  namespace: default
+  labels:
+    parcagpu.dev/enabled: "true"
+spec:
+  containers:
+    - name: cuda-workload
+      image: ghcr.io/parca-dev/parcagpu-test:latest
+      command:
+        - /test/microbenchmarks/pc_sample_toy
+        - "8"
+      env:
+        - name: PARCAGPU_DEBUG
+          value: "1"
+        - name: PARCAGPU_PC_SAMPLING_RATE
+          value: "100"
+        - name: PARCAGPU_SAMPLING_FACTOR
+          value: "18"
+      resources:
+        limits:
+          nvidia.com/gpu: 1
+  restartPolicy: Never

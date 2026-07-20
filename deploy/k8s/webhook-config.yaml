@@ -1,0 +1,25 @@
+---
+# MutatingWebhookConfiguration for parcagpu injection
+# The caBundle is patched by the TLS Job after cert generation.
+apiVersion: admissionregistration.k8s.io/v1
+kind: MutatingWebhookConfiguration
+metadata:
+  name: parcagpu-webhook
+webhooks:
+  - name: parcagpu-webhook.parca-dev.svc
+    matchPolicy: Equivalent
+    sideEffects: None
+    admissionReviewVersions: ["v1"]
+    rules:
+      - apiGroups: [""]
+        apiVersions: ["v1"]
+        resources: ["pods"]
+        operations: ["CREATE"]
+        scope: "*"
+    clientConfig:
+      service:
+        name: parcagpu-webhook
+        namespace: kube-system
+        path: "/mutate"
+        port: 8443
+      caBundle: ""  # patched by deploy/k8s/webhook-tls-job.yaml

@@ -1,0 +1,48 @@
+---
+# Prometheus scrape config for parcagpu observer sidecars.
+# This ConfigMap can be mounted into a Prometheus instance or used as a
+# PodMonitor if the Prometheus operator is installed.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: parcagpu-prometheus-config
+  namespace: default
+data:
+  parcagpu-scrape.yaml: |
+    scrape_configs:
+      - job_name: 'parcagpu-observer'
+        kubernetes_sd_configs:
+          - role: pod
+        relabel_configs:
+          # Only scrape pods with the prometheus.io/scrape annotation
+          - source_labels: [__meta_kubernetes_pod_annotation_prometheus_io_scrape]
+            action: keep
+            regex: true
+          # Use the port from the annotation
+          - source_labels: [__meta_kubernetes_pod_annotation_prometheus_io_port]
+            action: replace
+            target_label: __address__
+            regex: (.+)
+            replacement: $1
+          # Add pod metadata as labels
+          - source_labels: [__meta_kubernetes_pod_name]
+            action: replace
+            target_label: pod
+          - source_labels: [__meta_kubernetes_namespace]
+            action: replace
+            target_label: namespace
+---
+# PodMonitor for Prometheus Operator (if installed)
+apiVersion: monitoring.coreos.com/v1
+kind: PodMonitor
+metadata:
+  name: parcagpu-observer
+  namespace: default
+spec:
+  selector:
+    matchLabels:
+      parcagpu.dev/enabled: "true"
+  podMetricsEndpoints:
+    - port: metrics
+      path: /metrics
+      interval: 15s
