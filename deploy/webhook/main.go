@@ -276,28 +276,48 @@ func buildPatch(pod *podObject, cfg Config, namespace string) []jsonPatch {
 	// 4. For each existing container, add the volume mount and env var.
 	containers := getSlice(pod.Spec, "containers")
 	for i := range containers {
-		mountPath := fmt.Sprintf("/spec/containers/%d/volumeMounts/-", i)
-		envPath := fmt.Sprintf("/spec/containers/%d/env/-", i)
+		container, _ := containers[i].(map[string]interface{})
 
-		// Ensure volumeMounts array exists by adding the first element.
-		// Kubernetes patches: if the array doesn't exist, "add" to "-" creates it.
-		patch = append(patch, jsonPatch{
-			Op:   "add",
-			Path: mountPath,
-			Value: map[string]interface{}{
-				"name":      libVolumeName,
-				"mountPath": libMountPath,
-			},
-		})
+		// Add volumeMount — create array if missing, append if exists.
+		vmPath := fmt.Sprintf("/spec/containers/%d/volumeMounts", i)
+		if _, hasVM := container["volumeMounts"]; hasVM {
+			vmPath = fmt.Sprintf("/spec/containers/%d/volumeMounts/-", i)
+			patch = append(patch, jsonPatch{
+				Op:   "add",
+				Path: vmPath,
+				Value: map[string]interface{}{
+					"name":      libVolumeName,
+					"mountPath": libMountPath,
+				},
+			})
+		} else {
+			patch = append(patch, jsonPatch{
+				Op:    "add",
+				Path:  vmPath,
+				Value: []interface{}{map[string]interface{}{"name": libVolumeName, "mountPath": libMountPath}},
+			})
+		}
 
-		patch = append(patch, jsonPatch{
-			Op:   "add",
-			Path: envPath,
-			Value: map[string]interface{}{
-				"name":  "CUDA_INJECTION64_PATH",
-				"value": fmt.Sprintf("%s/%s", libMountPath, libFilename),
-			},
-		})
+		// Add env var — create array if missing, append if exists.
+		envPath := fmt.Sprintf("/spec/containers/%d/env", i)
+		envValue := map[string]interface{}{
+			"name":  "CUDA_INJECTION64_PATH",
+			"value": fmt.Sprintf("%s/%s", libMountPath, libFilename),
+		}
+		if _, hasEnv := container["env"]; hasEnv {
+			envPath = fmt.Sprintf("/spec/containers/%d/env/-", i)
+			patch = append(patch, jsonPatch{
+				Op:    "add",
+				Path:  envPath,
+				Value: envValue,
+			})
+		} else {
+			patch = append(patch, jsonPatch{
+				Op:    "add",
+				Path:  envPath,
+				Value: []interface{}{envValue},
+			})
+		}
 	}
 
 	// 5. Add the observer sidecar container.
