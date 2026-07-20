@@ -229,10 +229,8 @@ int BPF_USDT(handle_stall_reason_map, u64 names_base, u32 count) {
     int ret = bpf_probe_read_user(
         name, sizeof(name),
         (void *)(names_base + (u64)i * STALL_REASON_NAME_LEN));
-    if (ret != 0)
-      continue;
-
-    bpf_map_update_elem(&stall_reasons, &i, name, BPF_ANY);
+    if (ret == 0)
+      bpf_map_update_elem(&stall_reasons, &i, name, BPF_ANY);
   }
 
   u32 one = 1;
