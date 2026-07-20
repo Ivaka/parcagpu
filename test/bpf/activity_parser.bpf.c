@@ -340,8 +340,15 @@ int BPF_USDT(handle_pc_sample_batch, u64 ptrs_base, u32 count) {
     evt->stall_reason_count = sr_count;
 
     if (rec.stall_reason_ptr && sr_count > 0) {
-      bpf_probe_read_user(evt->stall_reasons,
-                          sr_count * sizeof(struct cupti_stall_reason),
+      u32 sr_bytes = sr_count * sizeof(struct cupti_stall_reason);
+      /* Barrier so the clamp below applies to the exact register passed to
+       * the helper; otherwise clang bounds-checks a truncated copy while
+       * passing the raw value and the verifier rejects the size argument
+       * ("R2 min value is negative"). */
+      asm volatile("" : "+r"(sr_bytes));
+      if (sr_bytes > sizeof(evt->stall_reasons))
+        sr_bytes = sizeof(evt->stall_reasons);
+      bpf_probe_read_user(evt->stall_reasons, sr_bytes,
                           (void *)rec.stall_reason_ptr);
     }
 
