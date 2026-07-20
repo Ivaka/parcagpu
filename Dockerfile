@@ -17,19 +17,18 @@ FROM ${CUDA_HEADERS} AS cuda-headers
 # GLIBC_2.38 and won't load on those containers.
 FROM ubuntu:20.04 AS builder
 
-# Install only build tools (no CUDA toolkit needed)
-# Ubuntu 20.04 has CMake 3.16, but we need 3.18+ — install from Kitware PPA.
+# Install build tools (no CUDA toolkit needed).
+# Ubuntu 20.04 ships CMake 3.16, but we need 3.18+. Download a newer CMake
+# binary directly from GitHub releases rather than using a PPA.
 RUN apt-get update && apt-get install -y \
     wget \
-    gnupg \
-    lsb-release \
-    && wget -qO - https://apt.kitware.com/keys/kitware-archive-latest.asc | apt-key add - \
-    && apt-add-repository "deb https://apt.kitware.com/ubuntu/ $(lsb_release -cs) main" \
-    && apt-get update && apt-get install -y \
-    cmake \
+    ca-certificates \
     make \
     g++ \
     systemtap-sdt-dev \
+    && wget -q https://github.com/Kitware/CMake/releases/download/v3.31.6/cmake-3.31.6-linux-x86_64.tar.gz -O /tmp/cmake.tar.gz \
+    && tar -C /usr/local --strip-components=1 -xzf /tmp/cmake.tar.gz \
+    && rm /tmp/cmake.tar.gz \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /build
