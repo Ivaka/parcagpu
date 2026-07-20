@@ -25,7 +25,7 @@ spec:
             - -cert=/certs/tls.crt
             - -key=/certs/tls.key
             - -port=8443
-            - -lib-image=europe-docker.pkg.dev/engineering-test-353509/ivaylo/parcagpu-test:latest
+            - -lib-image=europe-docker.pkg.dev/engineering-test-353509/ivaylo/parcagpu:latest
             - -observer-image=europe-docker.pkg.dev/engineering-test-353509/ivaylo/parcagpu-observer:latest
             - -metrics-port=9090
             - -image-pull-secret=parcagpu-regcred

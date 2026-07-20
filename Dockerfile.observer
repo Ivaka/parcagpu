@@ -22,7 +22,15 @@ FROM ${CUDA_HEADERS} AS cuda-headers
 FROM ubuntu:20.04 AS builder
 
 # Install build tools for both C (CMake) and Go (bpf2go) stages
+# Ubuntu 20.04 has CMake 3.16, but we need 3.18+ — install from Kitware PPA.
 RUN apt-get update && apt-get install -y \
+    wget \
+    gnupg \
+    lsb-release \
+    software-properties-common \
+    && wget -qO - https://apt.kitware.com/keys/kitware-archive-latest.asc | apt-key add - \
+    && apt-add-repository "deb https://apt.kitware.com/ubuntu/ $(lsb_release -cs) main" \
+    && apt-get update && apt-get install -y \
     cmake \
     make \
     g++ \
@@ -32,7 +40,6 @@ RUN apt-get update && apt-get install -y \
     llvm \
     wget \
     ca-certificates \
-    software-properties-common \
     && rm -rf /var/lib/apt/lists/*
 
 # Ubuntu 20.04 has Go 1.13, too old. Install Go 1.25 manually.

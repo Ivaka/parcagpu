@@ -18,7 +18,14 @@ FROM ${CUDA_HEADERS} AS cuda-headers
 FROM ubuntu:20.04 AS builder
 
 # Install only build tools (no CUDA toolkit needed)
+# Ubuntu 20.04 has CMake 3.16, but we need 3.18+ — install from Kitware PPA.
 RUN apt-get update && apt-get install -y \
+    wget \
+    gnupg \
+    lsb-release \
+    && wget -qO - https://apt.kitware.com/keys/kitware-archive-latest.asc | apt-key add - \
+    && apt-add-repository "deb https://apt.kitware.com/ubuntu/ $(lsb_release -cs) main" \
+    && apt-get update && apt-get install -y \
     cmake \
     make \
     g++ \

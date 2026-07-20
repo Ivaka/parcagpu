@@ -17,6 +17,13 @@ FROM ${CUDA_HEADERS} AS cuda-headers
 FROM ubuntu:20.04 AS builder
 
 RUN apt-get update && apt-get install -y \
+    wget \
+    gnupg \
+    lsb-release \
+    software-properties-common \
+    && wget -qO - https://apt.kitware.com/keys/kitware-archive-latest.asc | apt-key add - \
+    && apt-add-repository "deb https://apt.kitware.com/ubuntu/ $(lsb_release -cs) main" \
+    && apt-get update && apt-get install -y \
     cmake \
     make \
     g++ \
