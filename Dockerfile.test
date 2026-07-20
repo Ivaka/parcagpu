@@ -14,7 +14,7 @@
 ARG CUDA_HEADERS=ghcr.io/parca-dev/cuda-headers:12
 FROM ${CUDA_HEADERS} AS cuda-headers
 
-FROM ubuntu:24.04 AS builder
+FROM ubuntu:20.04 AS builder
 
 RUN apt-get update && apt-get install -y \
     cmake \

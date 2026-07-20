@@ -11,8 +11,11 @@ ARG CUDA_HEADERS=ghcr.io/parca-dev/cuda-headers:12
 # Import CUDA headers
 FROM ${CUDA_HEADERS} AS cuda-headers
 
-# Build stage
-FROM ubuntu:24.04 AS builder
+# Build stage — use Ubuntu 20.04 for glibc 2.31 compatibility.
+# The .so must run on older CUDA container images (based on Ubuntu 20.04/18.04)
+# which have older glibc versions. Building on 24.04 produces a .so that requires
+# GLIBC_2.38 and won't load on those containers.
+FROM ubuntu:20.04 AS builder
 
 # Install only build tools (no CUDA toolkit needed)
 RUN apt-get update && apt-get install -y \

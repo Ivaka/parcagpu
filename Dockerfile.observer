@@ -16,8 +16,10 @@ ARG CUDA_HEADERS=ghcr.io/parca-dev/cuda-headers:12
 # Import CUDA headers as a named stage so we can COPY --from it
 FROM ${CUDA_HEADERS} AS cuda-headers
 
-# Build stage — compiles the .so and the Go observer binary
-FROM ubuntu:24.04 AS builder
+# Build stage — use Ubuntu 20.04 for the .so (glibc 2.31 compatibility).
+# The observer binary itself is Go (static, no glibc dependency), but the .so
+# it ships must run on older CUDA container images.
+FROM ubuntu:20.04 AS builder
 
 # Install build tools for both C (CMake) and Go (bpf2go) stages
 RUN apt-get update && apt-get install -y \
@@ -30,9 +32,10 @@ RUN apt-get update && apt-get install -y \
     llvm \
     wget \
     ca-certificates \
+    software-properties-common \
     && rm -rf /var/lib/apt/lists/*
 
-# Install Go 1.25
+# Ubuntu 20.04 has Go 1.13, too old. Install Go 1.25 manually.
 RUN wget -q https://go.dev/dl/go1.25.1.linux-amd64.tar.gz -O /tmp/go.tar.gz && \
     tar -C /usr/local -xzf /tmp/go.tar.gz && \
     rm /tmp/go.tar.gz
