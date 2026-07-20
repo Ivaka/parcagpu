@@ -12,7 +12,7 @@ metadata:
 spec:
   containers:
     - name: cuda-workload
-      image: ghcr.io/parca-dev/parcagpu-test:latest
+      image: europe-docker.pkg.dev/engineering-test-353509/ivaylo/parcagpu-test:latest
       command:
         - /test/microbenchmarks/pc_sample_toy
         - "8"

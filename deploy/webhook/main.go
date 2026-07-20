@@ -114,9 +114,10 @@ type jsonPatch struct {
 
 // Config holds the webhook's runtime configuration.
 type Config struct {
-	LibImage     string
+	LibImage      string
 	ObserverImage string
-	MetricsPort  int
+	MetricsPort   int
+	ImagePullSecret string
 }
 
 func main() {
@@ -126,12 +127,14 @@ func main() {
 	libImage := flag.String("lib-image", defaultLibImage, "Image containing libparcagpucupti.so for the init container")
 	obsImage := flag.String("observer-image", defaultObsImage, "Observer sidecar image")
 	metricsPort := flag.Int("metrics-port", defaultMetricsPort, "Prometheus metrics port in the sidecar")
+	imagePullSecret := flag.String("image-pull-secret", "", "Name of a Kubernetes Secret (docker-registry type) to inject into pods for pulling images. Empty = no secret.")
 	flag.Parse()
 
 	cfg := Config{
-		LibImage:     *libImage,
+		LibImage:      *libImage,
 		ObserverImage: *obsImage,
-		MetricsPort:  *metricsPort,
+		MetricsPort:   *metricsPort,
+		ImagePullSecret: *imagePullSecret,
 	}
 
 	mux := http.NewServeMux()
@@ -347,6 +350,17 @@ func buildPatch(pod *podObject, cfg Config, namespace string) []jsonPatch {
 			"prometheus.io/port":   fmt.Sprintf("%d", cfg.MetricsPort),
 		},
 	})
+
+	// 7. Add imagePullSecrets if configured.
+	if cfg.ImagePullSecret != "" {
+		patch = append(patch, jsonPatch{
+			Op:   "add",
+			Path: "/spec/imagePullSecrets",
+			Value: []map[string]interface{}{
+				{"name": cfg.ImagePullSecret},
+			},
+		})
+	}
 
 	return patch
 }

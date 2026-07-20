@@ -20,11 +20,15 @@ spec:
       serviceAccountName: parcagpu-webhook
       containers:
         - name: webhook
-          image: ghcr.io/parca-dev/parcagpu-webhook:latest
+          image: europe-docker.pkg.dev/engineering-test-353509/ivaylo/parcagpu-webhook:latest
           args:
             - -cert=/certs/tls.crt
             - -key=/certs/tls.key
             - -port=8443
+            - -lib-image=europe-docker.pkg.dev/engineering-test-353509/ivaylo/parcagpu-test:latest
+            - -observer-image=europe-docker.pkg.dev/engineering-test-353509/ivaylo/parcagpu-observer:latest
+            - -metrics-port=9090
+            - -image-pull-secret=parcagpu-regcred
           ports:
             - containerPort: 8443
               name: webhook
