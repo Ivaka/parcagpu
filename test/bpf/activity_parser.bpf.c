@@ -340,11 +340,13 @@ int BPF_USDT(handle_pc_sample_batch, u64 ptrs_base, u32 count) {
     evt->stall_reason_count = sr_count;
 
     if (rec.stall_reason_ptr && sr_count > 0) {
-      u32 sr_bytes = sr_count * sizeof(struct cupti_stall_reason);
-      /* Barrier so the clamp below applies to the exact register passed to
-       * the helper; otherwise clang bounds-checks a truncated copy while
-       * passing the raw value and the verifier rejects the size argument
-       * ("R2 min value is negative"). */
+      /* Keep the byte count in the 64-bit domain: a u32 here makes clang
+       * bounds-check a truncated copy while passing the raw 64-bit register
+       * to the helper, which the verifier rejects ("R2 min value is
+       * negative"). A u64 compare bounds the exact register passed. The
+       * barrier stops clang from splitting the checked value from the
+       * passed value. */
+      u64 sr_bytes = (u64)sr_count * sizeof(struct cupti_stall_reason);
       asm volatile("" : "+r"(sr_bytes));
       if (sr_bytes > sizeof(evt->stall_reasons))
         sr_bytes = sizeof(evt->stall_reasons);
