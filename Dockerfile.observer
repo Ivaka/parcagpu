@@ -10,6 +10,12 @@
 # a CUDA workload. The workload must have libparcagpucupti.so injected via
 # CUDA_INJECTION64_PATH (handled by the admission webhook).
 
+# CUDA headers image (can be overridden at build time)
+ARG CUDA_HEADERS=ghcr.io/parca-dev/cuda-headers:12
+
+# Import CUDA headers as a named stage so we can COPY --from it
+FROM ${CUDA_HEADERS} AS cuda-headers
+
 # Build stage — compiles the .so and the Go observer binary
 FROM ubuntu:24.04 AS builder
 
@@ -35,10 +41,8 @@ ENV PATH="/usr/local/go/bin:${PATH}"
 
 WORKDIR /build
 
-# Copy CUDA headers (from the cuda-headers image or a previous build stage).
-# The observer binary itself doesn't need CUDA headers, but the .so does.
-ARG CUDA_HEADERS=ghcr.io/parca-dev/cuda-headers:12
-COPY --from=${CUDA_HEADERS} /usr/local/cuda /usr/local/cuda
+# Copy CUDA headers from the named stage
+COPY --from=cuda-headers /usr/local/cuda /usr/local/cuda
 
 # Copy source for the .so build
 COPY src /build/src
