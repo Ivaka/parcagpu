@@ -8,6 +8,7 @@ metadata:
 webhooks:
   - name: parcagpu-webhook.parca-dev.svc
     matchPolicy: Equivalent
+    failurePolicy: Ignore          # Don't block pods if webhook is down (chicken-and-egg)
     sideEffects: None
     admissionReviewVersions: ["v1"]
     rules:
@@ -16,6 +17,11 @@ webhooks:
         resources: ["pods"]
         operations: ["CREATE"]
         scope: "*"
+    namespaceSelector:
+      matchExpressions:
+        - key: kubernetes.io/metadata.name
+          operator: NotIn
+          values: ["kube-system"]  # Don't intercept kube-system pods (webhook, TLS job, etc.)
     clientConfig:
       service:
         name: parcagpu-webhook

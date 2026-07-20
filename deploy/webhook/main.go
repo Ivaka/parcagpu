@@ -250,7 +250,7 @@ func buildPatch(pod *podObject, cfg Config, namespace string) []jsonPatch {
 		"image": cfg.LibImage,
 		"command": []string{
 			"sh", "-c",
-			fmt.Sprintf("cp /usr/lib/%s %s/%s", libFilename, libMountPath, libFilename),
+			fmt.Sprintf("for src in /usr/lib/%s /test/build/lib/%s; do [ -f \"$src\" ] && cp \"$src\" %s/%s && break; done && [ -f %s/%s ] || { echo 'ERROR: %s not found in init container image' >&2; exit 1; }", libFilename, libFilename, libMountPath, libFilename, libMountPath, libFilename, libFilename),
 		},
 		"volumeMounts": []map[string]interface{}{
 			{

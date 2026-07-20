@@ -6,15 +6,25 @@ metadata:
   name: parcagpu-webhook
   namespace: kube-system
 ---
-# ClusterRole — webhook needs to read pods to verify labels
+# ClusterRole — webhook needs to read pods, manage TLS secrets,
+# and patch the MutatingWebhookConfiguration
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
 metadata:
   name: parcagpu-webhook
 rules:
+  # Webhook reads pods to inspect labels
   - apiGroups: [""]
     resources: ["pods"]
     verbs: ["get", "list", "watch"]
+  # TLS Job creates/updates the TLS secret
+  - apiGroups: [""]
+    resources: ["secrets"]
+    verbs: ["get", "create", "update", "patch"]
+  # TLS Job patches the MutatingWebhookConfiguration with the CA bundle
+  - apiGroups: ["admissionregistration.k8s.io"]
+    resources: ["mutatingwebhookconfigurations"]
+    verbs: ["get", "patch"]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding

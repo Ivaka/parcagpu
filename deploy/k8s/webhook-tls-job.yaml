@@ -12,14 +12,18 @@ spec:
   template:
     spec:
       restartPolicy: Never
+      serviceAccountName: parcagpu-webhook
       containers:
         - name: tls-gen
-          image: busybox:latest
+          image: alpine:3.20
           command:
             - sh
             - -c
             - |
               set -e
+              echo "Installing openssl and kubectl..."
+              apk add --no-cache openssl kubectl
+
               echo "Generating self-signed TLS certificate..."
               mkdir -p /certs
 
@@ -28,9 +32,9 @@ spec:
 
               # Generate CSR
               openssl req -new -key /certs/tls.key -out /certs/tls.csr \
-                -subj "/CN=parcagpu-webhook.default.svc"
+                -subj "/CN=parcagpu-webhook.kube-system.svc"
 
-              # Create a config for SAN
+              # Create SAN config
               cat > /certs/san.cnf <<EOF
               [req]
               distinguished_name = req_distinguished_name
@@ -39,12 +43,9 @@ spec:
               subjectAltName = @alt_names
               [alt_names]
               DNS.1 = parcagpu-webhook
-              DNS.2 = parcagpu-webhook.default
-              DNS.3 = parcagpu-webhook.default.svc
-              DNS.4 = parcagpu-webhook.default.svc.cluster.local
-              DNS.5 = parcagpu-webhook.kube-system
-              DNS.6 = parcagpu-webhook.kube-system.svc
-              DNS.7 = parcagpu-webhook.kube-system.svc.cluster.local
+              DNS.2 = parcagpu-webhook.kube-system
+              DNS.3 = parcagpu-webhook.kube-system.svc
+              DNS.4 = parcagpu-webhook.kube-system.svc.cluster.local
               EOF
 
               # Self-sign the cert
@@ -58,7 +59,8 @@ spec:
                 -n kube-system --dry-run=client -o yaml | kubectl apply -f -
 
               echo "Patching MutatingWebhookConfiguration with CA bundle..."
-              CA_BUNDLE=$(base64 -w0 /certs/tls.crt)
+              # Use tr to strip newlines — Alpine's base64 doesn't support -w0
+              CA_BUNDLE=$(cat /certs/tls.crt | base64 | tr -d '\n')
               kubectl patch mutatingwebhookconfiguration parcagpu-webhook \
                 --type='json' -p="[{\"op\":\"replace\",\"path\":\"/webhooks/0/clientConfig/caBundle\",\"value\":\"${CA_BUNDLE}\"}]"
 

@@ -1,14 +1,14 @@
 ---
-# Prometheus scrape config for parcagpu observer sidecars.
-# This ConfigMap can be mounted into a Prometheus instance or used as a
-# PodMonitor if the Prometheus operator is installed.
+# ConfigMap with Prometheus scrape config for parcagpu observer sidecars
 apiVersion: v1
 kind: ConfigMap
 metadata:
   name: parcagpu-prometheus-config
   namespace: default
 data:
-  parcagpu-scrape.yaml: |
+  prometheus.yml: |
+    global:
+      scrape_interval: 15s
     scrape_configs:
       - job_name: 'parcagpu-observer'
         kubernetes_sd_configs:
@@ -19,11 +19,11 @@ data:
             action: keep
             regex: true
           # Use the port from the annotation
-          - source_labels: [__meta_kubernetes_pod_annotation_prometheus_io_port]
+          - source_labels: [__address__, __meta_kubernetes_pod_annotation_prometheus_io_port]
             action: replace
+            regex: ([^:]+)(?::\d+)?;(\d+)
+            replacement: $1:$2
             target_label: __address__
-            regex: (.+)
-            replacement: $1
           # Add pod metadata as labels
           - source_labels: [__meta_kubernetes_pod_name]
             action: replace
@@ -32,17 +32,55 @@ data:
             action: replace
             target_label: namespace
 ---
-# PodMonitor for Prometheus Operator (if installed)
-apiVersion: monitoring.coreos.com/v1
-kind: PodMonitor
+# Simple Prometheus deployment (no operator required)
+apiVersion: apps/v1
+kind: Deployment
 metadata:
-  name: parcagpu-observer
+  name: prometheus
+  namespace: default
+  labels:
+    app: prometheus
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: prometheus
+  template:
+    metadata:
+      labels:
+        app: prometheus
+    spec:
+      containers:
+        - name: prometheus
+          image: prom/prometheus:latest
+          args:
+            - --config.file=/etc/prometheus/prometheus.yml
+            - --storage.tsdb.path=/prometheus
+            - --storage.tsdb.retention.time=24h
+          ports:
+            - containerPort: 9090
+              name: http
+          volumeMounts:
+            - name: config
+              mountPath: /etc/prometheus
+            - name: data
+              mountPath: /prometheus
+      volumes:
+        - name: config
+          configMap:
+            name: parcagpu-prometheus-config
+        - name: data
+          emptyDir: {}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: prometheus
   namespace: default
 spec:
   selector:
-    matchLabels:
-      parcagpu.dev/enabled: "true"
-  podMetricsEndpoints:
-    - port: metrics
-      path: /metrics
-      interval: 15s
+    app: prometheus
+  ports:
+    - port: 9090
+      targetPort: 9090
+      name: http
