@@ -164,6 +164,7 @@ if(BUILD_TESTS)
     # only accesses their symbols via dlsym, not direct references.
     target_link_libraries(test_cupti_prof
         dl
+        pthread
         -Wl,--no-as-needed
         cuda_mock
         cupti_mock
