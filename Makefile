@@ -215,16 +215,18 @@ build-observer-arm64:
 		.
 	@echo "Observer image built: parcagpu-observer:arm64"
 
-# Build and push multi-arch observer image to ghcr.io
+# Build and push observer image to registry.
+# Default: amd64 only (fast, no QEMU). Set PLATFORM=linux/amd64,linux/arm64 for multi-arch.
 OBSERVER_IMAGE ?= ghcr.io/parca-dev/parcagpu-observer
 OBSERVER_IMAGE_TAG ?= latest
+PLATFORM ?= linux/amd64
 docker-push-observer:
 	@test -f test/bpf/vmlinux.h || { echo "ERROR: test/bpf/vmlinux.h not found. Generate it with: bpftool btf dump file /sys/kernel/btf/vmlinux format c > test/bpf/vmlinux.h" >&2; exit 1; }
-	@echo "=== Building and pushing multi-arch observer image to $(OBSERVER_IMAGE):$(OBSERVER_IMAGE_TAG) ==="
+	@echo "=== Building and pushing observer image to $(OBSERVER_IMAGE):$(OBSERVER_IMAGE_TAG) (platform: $(PLATFORM)) ==="
 	@docker buildx create --name parcagpu-builder --use --bootstrap 2>/dev/null || docker buildx use parcagpu-builder
 	@docker buildx build -f Dockerfile.observer \
 		--target runtime \
-		--platform linux/amd64,linux/arm64 \
+		--platform $(PLATFORM) \
 		--tag $(OBSERVER_IMAGE):$(OBSERVER_IMAGE_TAG) \
 		--push \
 		.
