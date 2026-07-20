@@ -27,7 +27,6 @@ RUN apt-get update && apt-get install -y \
     systemtap-sdt-dev \
     clang \
     libbpf-dev \
-    bpftool \
     llvm \
     wget \
     ca-certificates \
