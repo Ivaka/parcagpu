@@ -92,21 +92,17 @@ docker-push:
 		.
 	@echo "Images pushed successfully to $(IMAGE):$(IMAGE_TAG)"
 
-# Build test container image (requires local .so + mock libs from build-amd64)
-docker-test-build: build-amd64
+# Build test container image (self-contained Docker build, no local build needed)
+docker-test-build:
 	@echo "=== Building test container image ==="
-	@cp build/amd64/$(LIB_NAME) build-local/lib/ 2>/dev/null || true
-	@cmake -B build-local -S . -DCMAKE_BUILD_TYPE=RelWithDebInfo -DBUILD_TESTS=ON 2>/dev/null || true
-	@cmake --build build-local 2>/dev/null || true
-	@mkdir -p build-local/lib build-local/bin
-	@cp build/amd64/$(LIB_NAME) build-local/lib/
 	@docker build -f Dockerfile.test -t parcagpu-test:latest .
 	@echo "Test container built: parcagpu-test:latest"
 
-# Build and push the test container image to ghcr.io
+# Build and push the test container image to registry
 TEST_IMAGE ?= ghcr.io/parca-dev/parcagpu-test
 TEST_IMAGE_TAG ?= latest
 docker-push-test: docker-test-build
+	@echo "=== Pushing test image to $(TEST_IMAGE):$(TEST_IMAGE_TAG) ==="
 	@echo "=== Pushing test image to $(TEST_IMAGE):$(TEST_IMAGE_TAG) ==="
 	@docker tag parcagpu-test:latest $(TEST_IMAGE):$(TEST_IMAGE_TAG)
 	@docker push $(TEST_IMAGE):$(TEST_IMAGE_TAG)

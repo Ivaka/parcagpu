@@ -5,10 +5,8 @@
 
 # Build artifacts (in case they exist in directories we copy)
 build/
-build-*/
+build-local/
 *.o
-*.so
-*.so.*
 
 # CMake artifacts
 CMakeCache.txt
