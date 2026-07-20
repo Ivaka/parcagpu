@@ -221,6 +221,10 @@ int BPF_USDT(handle_stall_reason_map, u64 names_base, u32 count) {
     count = MAX_STALL_REASONS;
 
   // Read each 64-byte name slot and store in the BPF map.
+  // Unrolled to satisfy the BPF verifier — without unrolling, the two paths
+  // (read success vs failure) leave the stack in different states, causing
+  // the verifier to never converge and flag an "infinite loop".
+  #pragma unroll
   for (u32 i = 0; i < MAX_STALL_REASONS; i++) {
     if (i >= count)
       break;

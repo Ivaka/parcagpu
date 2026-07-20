@@ -16,6 +16,12 @@ metadata:
   labels:
     parcagpu.dev/enabled: "true"
 spec:
+  nodeSelector:
+    cloud.google.com/gke-nodepool: gpus
+  tolerations:
+    - key: nvidia.com/gpu
+      operator: Exists
+      effect: NoSchedule
   containers:
     - name: cuda-workload
       image: europe-docker.pkg.dev/engineering-test-353509/ivaylo/parcagpu-test:latest
